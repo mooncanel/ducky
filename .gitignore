@@ -2,3 +2,21 @@
 *.ez
 /build
 erl_crash.dump
+
+# Rust/Cargo
+/native/*/target
+**/*.rs.bk
+
+# Mix
+/_build
+/deps
+/.fetch
+erl_crash.dump
+*.ez
+/doc
+/.elixir_ls
+
+# Native lib output
+priv/native/*.so
+priv/native/*.dll
+priv/native/*.dylib

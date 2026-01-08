@@ -1,0 +1,21 @@
+[package]
+name = "ducky_nif"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Glenn Miao (lemorage) <one.lemorage@gmail.com>"]
+license = "Apache-2.0"
+
+[lib]
+name = "ducky_nif"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.37.0"
+duckdb = { version = "1.4.3", features = ["bundled"] }
+
+[profile.release]
+lto = "fat"
+opt-level = 3
+codegen-units = 1
+strip = true
