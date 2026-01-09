@@ -8,11 +8,12 @@
 //// ```gleam
 //// import ducky
 //// import gleam/io
+//// import gleam/string
 ////
 //// pub fn main() {
 ////   let assert Ok(conn) = ducky.connect(":memory:")
 ////   let assert Ok(result) = ducky.query(conn, "SELECT 42 as answer")
-////   io.debug(result)
+////   io.println(string.inspect(result))
 //// }
 //// ```
 
