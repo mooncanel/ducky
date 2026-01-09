@@ -87,11 +87,20 @@ fn connect(path: String) -> Result<ResourceArc<ConnectionResource>, DuckyError> 
 /// - `conn`: Connection resource to close
 ///
 /// ## Returns
-/// - `Ok(atom::nil())` on success
+/// - `Ok(())` on success
+/// - `Err(DuckyError)` if close fails
 #[rustler::nif]
-fn close(_conn: ResourceArc<ConnectionResource>) -> rustler::Atom {
-    // Resource will be dropped automatically, closing the connection
-    atoms::nil()
+fn close(conn: ResourceArc<ConnectionResource>) -> Result<rustler::Atom, DuckyError> {
+    // Attempt to lock the connection
+    let _guard = conn
+        .connection
+        .lock()
+        .map_err(|e| DuckyError::DatabaseError(format!("Connection mutex poisoned: {}", e)))?;
+
+    // DuckDB connections are closed via Drop when ResourceArc is dropped
+    // We just validate the connection is accessible before allowing the drop
+    drop(_guard);
+    Ok(atoms::nil())
 }
 
 /// Health check NIF to verify the library loads correctly.
