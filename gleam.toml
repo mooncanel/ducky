@@ -2,8 +2,8 @@ name = "ducky"
 version = "0.1.0"
 description = "Use DuckDB in Gleam!"
 licences = ["Apache-2.0"]
-repository = { type = "github", user = "clannad", repo = "ducky" }
-gleam = ">= 1.2.0"
+repository = { type = "github", user = "lemorage", repo = "ducky" }
+gleam = ">= 1.4.0"
 
 [dependencies]
 gleam_stdlib = ">= 0.44.0 and < 2.0.0"

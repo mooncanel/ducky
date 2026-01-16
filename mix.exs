@@ -10,12 +10,28 @@ defmodule Ducky.MixProject do
       compilers: [:gleam, :rustler] ++ Mix.compilers(),
       rustler_crates: [
         ducky_nif: [
-          path: "native/ducky_nif",
+          path: "priv/ducky_nif",
           mode: :release
         ]
       ],
+      package: package(),
       aliases: aliases(),
       deps: deps()
+    ]
+  end
+
+  defp package do
+    [
+      files: ~w(
+        src
+        priv
+        gleam.toml
+        LICENSE
+        README.md
+        CHANGELOG.md
+      ),
+      licenses: ["Apache-2.0"],
+      links: %{"GitHub" => "https://github.com/lemorage/ducky"}
     ]
   end
 

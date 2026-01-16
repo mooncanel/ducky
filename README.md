@@ -1,39 +1,28 @@
 # ducky
 
-Native DuckDB driver for Gleam with support for Erlang and JavaScript runtimes.
+Native DuckDB driver for Gleam.
 
 [![Package Version](https://img.shields.io/hexpm/v/ducky)](https://hex.pm/packages/ducky)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/ducky/)
 
-## Installation
+## Install
 
 ```sh
 gleam add ducky
 ```
 
-## Usage
+## Quick start
 
 ```gleam
 import ducky
 
-pub fn main() {
-  let assert Ok(conn) = ducky.connect(":memory:")
-  let assert Ok(result) = ducky.query(conn, "SELECT 42 as answer")
-
-  // Process results...
-}
+use conn <- ducky.with_connection("data.db")
+ducky.query_params(conn, "SELECT * FROM users WHERE id = ?", [
+  types.Integer(42)
+])
 ```
 
-## Development Status
-
-This package is in early development. Core features are being implemented.
-
-## Development
-
-```sh
-gleam test  # Run the tests
-gleam build # Build the project
-```
+See [examples/](https://github.com/lemorage/ducky/tree/master/examples) for complete usage patterns.
 
 ## License
 
