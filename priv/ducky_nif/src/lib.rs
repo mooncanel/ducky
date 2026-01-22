@@ -26,6 +26,10 @@ mod atoms {
         double,
         text,
         blob,
+        timestamp,
+        date,
+        time,
+        interval,
     }
 }
 
@@ -159,6 +163,31 @@ fn execute_query<'a>(
     execute_statement(env, &connection, &sql, param_refs.as_slice())
 }
 
+/// Converts Arrow TimeUnit to DuckDB TimeUnit.
+fn arrow_to_duckdb_time_unit(
+    arrow_unit: duckdb::arrow::datatypes::TimeUnit,
+) -> duckdb::types::TimeUnit {
+    use duckdb::arrow::datatypes::TimeUnit as ArrowUnit;
+    use duckdb::types::TimeUnit as DuckUnit;
+    match arrow_unit {
+        ArrowUnit::Second => DuckUnit::Second,
+        ArrowUnit::Millisecond => DuckUnit::Millisecond,
+        ArrowUnit::Microsecond => DuckUnit::Microsecond,
+        ArrowUnit::Nanosecond => DuckUnit::Nanosecond,
+    }
+}
+
+/// Normalizes a temporal value to microseconds based on TimeUnit.
+fn normalize_to_micros(time_unit: duckdb::types::TimeUnit, value: i64) -> i64 {
+    use duckdb::types::TimeUnit;
+    match time_unit {
+        TimeUnit::Second => value * 1_000_000,
+        TimeUnit::Millisecond => value * 1_000,
+        TimeUnit::Microsecond => value,
+        TimeUnit::Nanosecond => value / 1_000,
+    }
+}
+
 /// Converts a DuckDB ValueRef to an Erlang term.
 fn value_to_term<'a>(env: Env<'a>, value: ValueRef) -> NifResult<Term<'a>> {
     match value {
@@ -188,6 +217,27 @@ fn value_to_term<'a>(env: Env<'a>, value: ValueRef) -> NifResult<Term<'a>> {
             Ok(text.encode(env))
         }
         ValueRef::Blob(b) => Ok(b.encode(env)),
+        ValueRef::Timestamp(time_unit, value) => {
+            let micros = normalize_to_micros(time_unit, value);
+            Ok((atoms::timestamp(), micros).encode(env))
+        }
+        ValueRef::Date32(days) => Ok((atoms::date(), days).encode(env)),
+        ValueRef::Time64(time_unit, value) => {
+            let micros = normalize_to_micros(time_unit, value);
+            Ok((atoms::time(), micros).encode(env))
+        }
+        ValueRef::Interval {
+            months,
+            days,
+            nanos,
+        } => {
+            // Convert to total nanoseconds (approximate for months)
+            // 1 month ≈ 30 days
+            let month_nanos = (months as i64) * 30 * 24 * 60 * 60 * 1_000_000_000;
+            let day_nanos = (days as i64) * 24 * 60 * 60 * 1_000_000_000;
+            let total_nanos = month_nanos + day_nanos + nanos;
+            Ok((atoms::interval(), total_nanos).encode(env))
+        }
         ValueRef::Struct(struct_array, idx) => encode_struct(env, struct_array, idx),
         other => {
             let type_name = format!("Unsupported ValueRef: {:?}", other);
@@ -280,6 +330,34 @@ fn encode_struct<'a>(
             DataType::Struct(_) => {
                 let child_struct = field.as_struct();
                 ValueRef::Struct(child_struct, row_idx)
+            }
+            DataType::Timestamp(time_unit, _) => {
+                use duckdb::arrow::datatypes::TimestampMicrosecondType;
+                let arr = field.as_primitive::<TimestampMicrosecondType>();
+                let duckdb_unit = arrow_to_duckdb_time_unit(*time_unit);
+                ValueRef::Timestamp(duckdb_unit, arr.value(row_idx))
+            }
+            DataType::Date32 => {
+                use duckdb::arrow::datatypes::Date32Type;
+                let arr = field.as_primitive::<Date32Type>();
+                ValueRef::Date32(arr.value(row_idx))
+            }
+            DataType::Time64(time_unit) => {
+                use duckdb::arrow::datatypes::Time64MicrosecondType;
+                let arr = field.as_primitive::<Time64MicrosecondType>();
+                let duckdb_unit = arrow_to_duckdb_time_unit(*time_unit);
+                ValueRef::Time64(duckdb_unit, arr.value(row_idx))
+            }
+            DataType::Interval(_) => {
+                // IntervalMonthDayNano is a struct with fields: months, days, nanoseconds
+                use duckdb::arrow::datatypes::IntervalMonthDayNanoType;
+                let arr = field.as_primitive::<IntervalMonthDayNanoType>();
+                let interval = arr.value(row_idx);
+                ValueRef::Interval {
+                    months: interval.months,
+                    days: interval.days,
+                    nanos: interval.nanoseconds,
+                }
             }
             _ => {
                 // Unsupported child type, encode as null

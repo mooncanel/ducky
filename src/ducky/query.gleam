@@ -69,6 +69,7 @@ fn decode_value(dyn: dynamic.Dynamic) -> Value {
   case classification {
     "Atom" -> types.Null
     "Dict" -> decode_struct(dyn)
+    "Array" -> decode_temporal(dyn)
     _ -> {
       let value_decoder =
         decode.one_of(decode.bool |> decode.map(types.Boolean), or: [
@@ -106,6 +107,41 @@ fn decode_struct(dyn: dynamic.Dynamic) -> Value {
   decode.run(dyn, decoder)
   |> result.unwrap(or: types.Null)
 }
+
+/// Decodes tagged tuples for temporal types.
+fn decode_temporal(dyn: dynamic.Dynamic) -> Value {
+  let decoder = {
+    use tag_dynamic <- decode.subfield([0], decode.dynamic)
+    use value <- decode.subfield([1], decode.int)
+
+    // Convert atom tag to string
+    let tag = case dynamic.classify(tag_dynamic) {
+      "Atom" -> atom_to_string(tag_dynamic)
+      "String" ->
+        decode.run(tag_dynamic, decode.string)
+        |> result.unwrap(or: "")
+      _ -> ""
+    }
+
+    decode.success(#(tag, value))
+  }
+
+  case decode.run(dyn, decoder) {
+    Ok(#(tag, value)) ->
+      case tag {
+        "timestamp" -> types.Timestamp(value)
+        "date" -> types.Date(value)
+        "time" -> types.Time(value)
+        "interval" -> types.Interval(value)
+        _ -> types.Null
+      }
+    Error(_) -> types.Null
+  }
+}
+
+/// Converts an Erlang atom to a String.
+@external(erlang, "erlang", "atom_to_binary")
+fn atom_to_string(atom: dynamic.Dynamic) -> String
 
 /// Converts a Value to a Dynamic for passing to the NIF.
 fn value_to_dynamic(value: Value) -> dynamic.Dynamic {

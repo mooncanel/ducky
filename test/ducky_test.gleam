@@ -318,3 +318,147 @@ pub fn query_struct_field_accessor_test() {
   types.field(point_value, "z")
   |> should.equal(option.None)
 }
+
+pub fn query_timestamp_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) =
+    ducky.query(conn, "SELECT TIMESTAMP '2024-01-15 10:30:45' as ts")
+
+  let assert [row] = result.rows
+  let assert types.Row([ts_value]) = row
+
+  case ts_value {
+    types.Timestamp(_) -> True
+    _ -> False
+  }
+  |> should.be_true
+}
+
+pub fn query_date_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) =
+    ducky.query(
+      conn,
+      "SELECT DATE '2024-01-15' as future, DATE '1970-01-01' as epoch, DATE '1950-01-01' as past",
+    )
+
+  let assert [row] = result.rows
+  let assert types.Row([future, epoch, past]) = row
+
+  case future {
+    types.Date(days) -> should.be_true(days > 19_000)
+    _ -> panic as "Expected Date variant"
+  }
+
+  case epoch {
+    types.Date(days) -> days |> should.equal(0)
+    _ -> panic as "Expected Date variant"
+  }
+
+  case past {
+    types.Date(days) -> should.be_true(days < 0)
+    _ -> panic as "Expected Date variant"
+  }
+}
+
+pub fn query_time_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) =
+    ducky.query(
+      conn,
+      "SELECT TIME '14:30:45' as afternoon, TIME '00:00:00' as midnight",
+    )
+
+  let assert [row] = result.rows
+  let assert types.Row([afternoon, midnight]) = row
+
+  case afternoon {
+    types.Time(micros) -> should.be_true(micros > 50_000_000_000)
+    _ -> panic as "Expected Time variant"
+  }
+
+  case midnight {
+    types.Time(micros) -> micros |> should.equal(0)
+    _ -> panic as "Expected Time variant"
+  }
+}
+
+pub fn query_interval_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) =
+    ducky.query(
+      conn,
+      "SELECT INTERVAL '2 days 3 hours' as pos, INTERVAL '-5 hours' as neg",
+    )
+
+  let assert [row] = result.rows
+  let assert types.Row([pos, neg]) = row
+
+  case pos {
+    types.Interval(nanos) -> should.be_true(nanos > 0)
+    _ -> panic as "Expected Interval variant"
+  }
+
+  case neg {
+    types.Interval(nanos) -> should.be_true(nanos < 0)
+    _ -> panic as "Expected Interval variant"
+  }
+}
+
+pub fn query_temporal_in_struct_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) =
+    ducky.query(
+      conn,
+      "SELECT {
+        'event': 'meeting',
+        'timestamp': TIMESTAMP '2024-01-15 10:30:00',
+        'date': DATE '2024-01-15'
+      } as event_data",
+    )
+
+  let assert [row] = result.rows
+  let assert types.Row([event_value]) = row
+  let assert types.Struct(fields) = event_value
+
+  // Check that temporal fields are properly decoded within struct
+  let assert Ok(event_name) = dict.get(fields, "event")
+  event_name
+  |> should.equal(types.Text("meeting"))
+
+  let assert Ok(ts_value) = dict.get(fields, "timestamp")
+  case ts_value {
+    types.Timestamp(_) -> True
+    _ -> False
+  }
+  |> should.be_true
+
+  let assert Ok(date_value) = dict.get(fields, "date")
+  case date_value {
+    types.Date(_) -> True
+    _ -> False
+  }
+  |> should.be_true
+}
+
+pub fn query_null_temporal_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(_) =
+    ducky.query(
+      conn,
+      "CREATE TABLE events (id INT, ts TIMESTAMP, d DATE, t TIME)",
+    )
+  let assert Ok(_) =
+    ducky.query(conn, "INSERT INTO events VALUES (1, NULL, NULL, NULL)")
+
+  let assert Ok(result) = ducky.query(conn, "SELECT ts, d, t FROM events")
+  let assert [row] = result.rows
+  let assert types.Row([ts, date, time]) = row
+
+  ts
+  |> should.equal(types.Null)
+  date
+  |> should.equal(types.Null)
+  time
+  |> should.equal(types.Null)
+}
