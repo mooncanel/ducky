@@ -64,12 +64,13 @@ pub fn query_params(
 
 /// Decodes a dynamic value from the NIF into a typed Value.
 fn decode_value(dyn: dynamic.Dynamic) -> Value {
-  // Check if this is the null atom (special case for SQL NULL)
   let classification = dynamic.classify(dyn)
   case classification {
+    // SQL NULL is represented as Erlang's null atom
     "Atom" -> types.Null
     "Dict" -> decode_struct(dyn)
-    "Array" -> decode_temporal(dyn)
+    "List" -> decode_list(dyn)
+    "Array" -> decode_temporal_array(dyn)
     _ -> {
       let value_decoder =
         decode.one_of(decode.bool |> decode.map(types.Boolean), or: [
@@ -79,10 +80,22 @@ fn decode_value(dyn: dynamic.Dynamic) -> Value {
           decode.bit_array |> decode.map(types.Blob),
         ])
 
-      // Run the decoder, fallback to Null if all decoders fail
       decode.run(dyn, value_decoder)
       |> result.unwrap(or: types.Null)
     }
+  }
+}
+
+/// Decodes a list with recursive element decoding.
+fn decode_list(dyn: dynamic.Dynamic) -> Value {
+  let decoder = decode.list(decode.dynamic)
+
+  case decode.run(dyn, decoder) {
+    Ok(elements) -> {
+      let decoded_elements = list.map(elements, decode_value)
+      types.List(decoded_elements)
+    }
+    Error(_) -> types.Null
   }
 }
 
@@ -108,8 +121,8 @@ fn decode_struct(dyn: dynamic.Dynamic) -> Value {
   |> result.unwrap(or: types.Null)
 }
 
-/// Decodes tagged tuples for temporal types.
-fn decode_temporal(dyn: dynamic.Dynamic) -> Value {
+/// Decodes tagged tuples sent as Erlang arrays for temporal types.
+fn decode_temporal_array(dyn: dynamic.Dynamic) -> Value {
   let decoder = {
     use tag_dynamic <- decode.subfield([0], decode.dynamic)
     use value <- decode.subfield([1], decode.int)

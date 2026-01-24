@@ -462,3 +462,144 @@ pub fn query_null_temporal_test() {
   time
   |> should.equal(types.Null)
 }
+
+pub fn query_simple_list_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) = ducky.query(conn, "SELECT [1, 2, 3, 4, 5] as nums")
+
+  let assert [row] = result.rows
+  let assert types.Row([list_value]) = row
+
+  case list_value {
+    types.List(items) -> {
+      list.length(items)
+      |> should.equal(5)
+
+      let assert [first, ..] = items
+      first
+      |> should.equal(types.Integer(1))
+    }
+    _ -> panic as "Expected List variant"
+  }
+}
+
+pub fn query_string_list_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) =
+    ducky.query(conn, "SELECT ['apple', 'banana', 'cherry'] as fruits")
+
+  let assert [row] = result.rows
+  let assert types.Row([list_value]) = row
+
+  case list_value {
+    types.List(items) -> {
+      list.length(items)
+      |> should.equal(3)
+
+      let assert [first, second, ..] = items
+      first
+      |> should.equal(types.Text("apple"))
+      second
+      |> should.equal(types.Text("banana"))
+    }
+    _ -> panic as "Expected List variant"
+  }
+}
+
+pub fn query_empty_list_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) = ducky.query(conn, "SELECT [] as empty")
+
+  let assert [row] = result.rows
+  let assert types.Row([list_value]) = row
+
+  case list_value {
+    types.List(items) -> {
+      list.length(items)
+      |> should.equal(0)
+    }
+    _ -> panic as "Expected List variant"
+  }
+}
+
+pub fn query_null_in_list_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) = ducky.query(conn, "SELECT [1, NULL, 3] as nums")
+
+  let assert [row] = result.rows
+  let assert types.Row([list_value]) = row
+
+  case list_value {
+    types.List(items) -> {
+      let assert [first, second, third] = items
+      first
+      |> should.equal(types.Integer(1))
+      second
+      |> should.equal(types.Null)
+      third
+      |> should.equal(types.Integer(3))
+    }
+    _ -> panic as "Expected List variant"
+  }
+}
+
+pub fn query_nested_list_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) =
+    ducky.query(conn, "SELECT [[1, 2], [3, 4], [5, 6]] as matrix")
+
+  let assert [row] = result.rows
+  let assert types.Row([list_value]) = row
+
+  case list_value {
+    types.List(outer_items) -> {
+      list.length(outer_items)
+      |> should.equal(3)
+
+      let assert [first_nested, ..] = outer_items
+      case first_nested {
+        types.List(inner) -> {
+          list.length(inner)
+          |> should.equal(2)
+
+          let assert [elem1, elem2] = inner
+          elem1
+          |> should.equal(types.Integer(1))
+          elem2
+          |> should.equal(types.Integer(2))
+        }
+        _ -> panic as "Expected nested List"
+      }
+    }
+    _ -> panic as "Expected List variant"
+  }
+}
+
+pub fn query_list_in_struct_test() {
+  let assert Ok(conn) = ducky.connect(":memory:")
+  let assert Ok(result) =
+    ducky.query(
+      conn,
+      "SELECT {
+        'name': 'Alice',
+        'scores': [95, 87, 92]
+      } as student",
+    )
+
+  let assert [row] = result.rows
+  let assert types.Row([struct_value]) = row
+  let assert types.Struct(fields) = struct_value
+
+  let assert Ok(name_value) = dict.get(fields, "name")
+  name_value
+  |> should.equal(types.Text("Alice"))
+
+  let assert Ok(scores_value) = dict.get(fields, "scores")
+  case scores_value {
+    types.List(scores) -> {
+      list.length(scores)
+      |> should.equal(3)
+    }
+    _ -> panic as "Expected List in struct"
+  }
+}

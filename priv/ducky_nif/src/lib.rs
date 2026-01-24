@@ -2,7 +2,7 @@
 //!
 //! Provides native bindings to DuckDB through Rustler.
 
-use duckdb::{Connection as DuckDBConnection, types::ValueRef};
+use duckdb::{Connection as DuckDBConnection, arrow::array::Array, types::ValueRef};
 use rustler::{Encoder, Env, NifResult, ResourceArc, Term};
 use std::sync::Mutex;
 
@@ -189,7 +189,7 @@ fn normalize_to_micros(time_unit: duckdb::types::TimeUnit, value: i64) -> i64 {
 }
 
 /// Converts a DuckDB ValueRef to an Erlang term.
-fn value_to_term<'a>(env: Env<'a>, value: ValueRef) -> NifResult<Term<'a>> {
+fn value_to_term<'a, 'b>(env: Env<'a>, value: ValueRef<'b>) -> NifResult<Term<'a>> {
     match value {
         ValueRef::Null => Ok(atoms::null().encode(env)),
         ValueRef::Boolean(b) => Ok(b.encode(env)),
@@ -239,11 +239,163 @@ fn value_to_term<'a>(env: Env<'a>, value: ValueRef) -> NifResult<Term<'a>> {
             Ok((atoms::interval(), total_nanos).encode(env))
         }
         ValueRef::Struct(struct_array, idx) => encode_struct(env, struct_array, idx),
+        ValueRef::List(list_type, row_idx) => encode_list(env, list_type, row_idx),
+        ValueRef::Array(_array, _row_idx) => Err(rustler::Error::Term(Box::new(
+            "DuckDB ARRAY type not yet supported",
+        ))),
         other => {
-            let type_name = format!("Unsupported ValueRef: {:?}", other);
+            let type_name = format!("Unsupported ValueRef variant: {:?}", other);
             Err(rustler::Error::Term(Box::new(type_name)))
         }
     }
+}
+
+/// Converts an Arrow array element to a DuckDB ValueRef.
+fn arrow_element_to_value_ref<'b>(
+    array: &'b dyn duckdb::arrow::array::Array,
+    elem_idx: usize,
+) -> Result<ValueRef<'b>, String> {
+    use duckdb::arrow::array::AsArray;
+    use duckdb::arrow::datatypes::DataType;
+    use duckdb::types::ListType;
+
+    match array.data_type() {
+        DataType::Boolean => {
+            let arr = array.as_boolean();
+            Ok(ValueRef::Boolean(arr.value(elem_idx)))
+        }
+        DataType::Int8 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::Int8Type>();
+            Ok(ValueRef::TinyInt(arr.value(elem_idx)))
+        }
+        DataType::Int16 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::Int16Type>();
+            Ok(ValueRef::SmallInt(arr.value(elem_idx)))
+        }
+        DataType::Int32 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::Int32Type>();
+            Ok(ValueRef::Int(arr.value(elem_idx)))
+        }
+        DataType::Int64 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::Int64Type>();
+            Ok(ValueRef::BigInt(arr.value(elem_idx)))
+        }
+        DataType::UInt8 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::UInt8Type>();
+            Ok(ValueRef::UTinyInt(arr.value(elem_idx)))
+        }
+        DataType::UInt16 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::UInt16Type>();
+            Ok(ValueRef::USmallInt(arr.value(elem_idx)))
+        }
+        DataType::UInt32 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::UInt32Type>();
+            Ok(ValueRef::UInt(arr.value(elem_idx)))
+        }
+        DataType::UInt64 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::UInt64Type>();
+            Ok(ValueRef::UBigInt(arr.value(elem_idx)))
+        }
+        DataType::Float32 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::Float32Type>();
+            Ok(ValueRef::Float(arr.value(elem_idx)))
+        }
+        DataType::Float64 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::Float64Type>();
+            Ok(ValueRef::Double(arr.value(elem_idx)))
+        }
+        DataType::Utf8 => {
+            let arr = array.as_string::<i32>();
+            Ok(ValueRef::Text(arr.value(elem_idx).as_bytes()))
+        }
+        DataType::Binary => {
+            let arr = array.as_binary::<i32>();
+            Ok(ValueRef::Blob(arr.value(elem_idx)))
+        }
+        DataType::Struct(_) => {
+            let child_struct = array.as_struct();
+            Ok(ValueRef::Struct(child_struct, elem_idx))
+        }
+        DataType::List(_) => {
+            let child_list = array.as_list();
+            Ok(ValueRef::List(ListType::Regular(child_list), elem_idx))
+        }
+        DataType::Timestamp(time_unit, _) => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::TimestampMicrosecondType>();
+            let duckdb_unit = arrow_to_duckdb_time_unit(*time_unit);
+            Ok(ValueRef::Timestamp(duckdb_unit, arr.value(elem_idx)))
+        }
+        DataType::Date32 => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::Date32Type>();
+            Ok(ValueRef::Date32(arr.value(elem_idx)))
+        }
+        DataType::Time64(time_unit) => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::Time64MicrosecondType>();
+            let duckdb_unit = arrow_to_duckdb_time_unit(*time_unit);
+            Ok(ValueRef::Time64(duckdb_unit, arr.value(elem_idx)))
+        }
+        DataType::Interval(_) => {
+            let arr = array.as_primitive::<duckdb::arrow::datatypes::IntervalMonthDayNanoType>();
+            let interval = arr.value(elem_idx);
+            Ok(ValueRef::Interval {
+                months: interval.months,
+                days: interval.days,
+                nanos: interval.nanoseconds,
+            })
+        }
+        unsupported_type => Err(format!(
+            "Unsupported list element type: {:?}",
+            unsupported_type
+        )),
+    }
+}
+
+/// Encodes a DuckDB list as an Erlang list with recursive element encoding.
+fn encode_list<'a, 'b>(
+    env: Env<'a>,
+    list_type: duckdb::types::ListType<'b>,
+    row_idx: usize,
+) -> NifResult<Term<'a>> {
+    use duckdb::types::ListType;
+
+    let (start, end, values_array) = match list_type {
+        ListType::Regular(list_array) => {
+            if list_array.is_null(row_idx) {
+                return Ok(atoms::null().encode(env));
+            }
+            let offsets = list_array.value_offsets();
+            (
+                offsets[row_idx] as usize,
+                offsets[row_idx + 1] as usize,
+                list_array.values(),
+            )
+        }
+        ListType::Large(large_list_array) => {
+            if large_list_array.is_null(row_idx) {
+                return Ok(atoms::null().encode(env));
+            }
+            let offsets = large_list_array.value_offsets();
+            (
+                offsets[row_idx] as usize,
+                offsets[row_idx + 1] as usize,
+                large_list_array.values(),
+            )
+        }
+    };
+
+    let mut elements = Vec::new();
+    for elem_idx in start..end {
+        if values_array.is_null(elem_idx) {
+            elements.push(atoms::null().encode(env));
+        } else {
+            let value_ref = arrow_element_to_value_ref(values_array.as_ref(), elem_idx)
+                .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+            let term = value_to_term(env, value_ref)?;
+            elements.push(term);
+        }
+    }
+
+    Ok(elements.encode(env))
 }
 
 /// Encodes a DuckDB struct as an Erlang map with recursive field encoding.
@@ -252,8 +404,6 @@ fn encode_struct<'a>(
     struct_array: &duckdb::arrow::array::StructArray,
     row_idx: usize,
 ) -> NifResult<Term<'a>> {
-    use duckdb::arrow::array::{Array, AsArray};
-    use duckdb::arrow::datatypes::DataType;
     use rustler::types::map::map_new;
 
     let mut map = map_new(env);
@@ -267,107 +417,20 @@ fn encode_struct<'a>(
             .map(|f| f.name().as_str())
             .unwrap_or("unknown");
 
-        // Check if this specific field is null
         if field.is_null(row_idx) {
             map = map.map_put(field_name.encode(env), atoms::null().encode(env))?;
             continue;
         }
 
-        // Create the appropriate ValueRef variant based on child field type
-        let child_value_ref = match field.data_type() {
-            DataType::Boolean => {
-                let arr = field.as_boolean();
-                ValueRef::Boolean(arr.value(row_idx))
+        match arrow_element_to_value_ref(field.as_ref(), row_idx) {
+            Ok(value_ref) => {
+                let term_value = value_to_term(env, value_ref)?;
+                map = map.map_put(field_name.encode(env), term_value)?;
             }
-            DataType::Int8 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::Int8Type>();
-                ValueRef::TinyInt(arr.value(row_idx))
-            }
-            DataType::Int16 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::Int16Type>();
-                ValueRef::SmallInt(arr.value(row_idx))
-            }
-            DataType::Int32 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::Int32Type>();
-                ValueRef::Int(arr.value(row_idx))
-            }
-            DataType::Int64 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::Int64Type>();
-                ValueRef::BigInt(arr.value(row_idx))
-            }
-            DataType::UInt8 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::UInt8Type>();
-                ValueRef::UTinyInt(arr.value(row_idx))
-            }
-            DataType::UInt16 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::UInt16Type>();
-                ValueRef::USmallInt(arr.value(row_idx))
-            }
-            DataType::UInt32 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::UInt32Type>();
-                ValueRef::UInt(arr.value(row_idx))
-            }
-            DataType::UInt64 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::UInt64Type>();
-                ValueRef::UBigInt(arr.value(row_idx))
-            }
-            DataType::Float32 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::Float32Type>();
-                ValueRef::Float(arr.value(row_idx))
-            }
-            DataType::Float64 => {
-                let arr = field.as_primitive::<duckdb::arrow::datatypes::Float64Type>();
-                ValueRef::Double(arr.value(row_idx))
-            }
-            DataType::Utf8 => {
-                let arr = field.as_string::<i32>();
-                ValueRef::Text(arr.value(row_idx).as_bytes())
-            }
-            DataType::Binary => {
-                let arr = field.as_binary::<i32>();
-                ValueRef::Blob(arr.value(row_idx))
-            }
-            DataType::Struct(_) => {
-                let child_struct = field.as_struct();
-                ValueRef::Struct(child_struct, row_idx)
-            }
-            DataType::Timestamp(time_unit, _) => {
-                use duckdb::arrow::datatypes::TimestampMicrosecondType;
-                let arr = field.as_primitive::<TimestampMicrosecondType>();
-                let duckdb_unit = arrow_to_duckdb_time_unit(*time_unit);
-                ValueRef::Timestamp(duckdb_unit, arr.value(row_idx))
-            }
-            DataType::Date32 => {
-                use duckdb::arrow::datatypes::Date32Type;
-                let arr = field.as_primitive::<Date32Type>();
-                ValueRef::Date32(arr.value(row_idx))
-            }
-            DataType::Time64(time_unit) => {
-                use duckdb::arrow::datatypes::Time64MicrosecondType;
-                let arr = field.as_primitive::<Time64MicrosecondType>();
-                let duckdb_unit = arrow_to_duckdb_time_unit(*time_unit);
-                ValueRef::Time64(duckdb_unit, arr.value(row_idx))
-            }
-            DataType::Interval(_) => {
-                // IntervalMonthDayNano is a struct with fields: months, days, nanoseconds
-                use duckdb::arrow::datatypes::IntervalMonthDayNanoType;
-                let arr = field.as_primitive::<IntervalMonthDayNanoType>();
-                let interval = arr.value(row_idx);
-                ValueRef::Interval {
-                    months: interval.months,
-                    days: interval.days,
-                    nanos: interval.nanoseconds,
-                }
-            }
-            _ => {
-                // Unsupported child type, encode as null
+            Err(_) => {
                 map = map.map_put(field_name.encode(env), atoms::null().encode(env))?;
-                continue;
             }
-        };
-
-        let term_value = value_to_term(env, child_value_ref)?;
-        map = map.map_put(field_name.encode(env), term_value)?;
+        }
     }
 
     Ok(map)
