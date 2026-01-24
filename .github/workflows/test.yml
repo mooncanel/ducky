@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Erlang/OTP and Gleam
-        uses: erlef/setup-beam@v1
+        uses: erlef/setup-beam@v1.18
         with:
           otp-version: "28"
           gleam-version: "1.14.0"
