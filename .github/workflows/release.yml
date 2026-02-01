@@ -33,14 +33,14 @@ jobs:
 
           # Linux x86_64
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-20.04
             rust_target: x86_64-unknown-linux-gnu
             lib_name: libducky_nif.so
             output_name: ducky_nif-x86_64-unknown-linux-gnu.so
 
           # Linux ARM64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-20.04
             rust_target: aarch64-unknown-linux-gnu
             lib_name: libducky_nif.so
             output_name: ducky_nif-aarch64-unknown-linux-gnu.so
@@ -139,13 +139,3 @@ jobs:
 
       - name: List artifacts
         run: ls -lh artifacts/
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: artifacts/*
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
